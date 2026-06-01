@@ -39,5 +39,9 @@ RUN Xvfb :99 -screen 0 1280x720x24 -nolisten tcp & XVFB_PID=$! \
 COPY entrypoint.sh screenshot.sh /
 RUN chmod +x /entrypoint.sh /screenshot.sh
 
+# Harness mod baked into the image. At container start the entrypoint copies
+# it (and symlinks user mods from ./mods) into the /noita/mods tmpfs.
+COPY noita-docker-harness/ /opt/noita-docker-harness/
+
 WORKDIR /noita
 ENTRYPOINT ["/entrypoint.sh"]

@@ -4,15 +4,18 @@ services:
     image: noita-headless
     # Pass Noita cmdline args by overriding command, e.g.
     #   docker compose run --rm noita -gamemode 0
-    # Disable individual pre-seeding steps (all default to 1):
-    #   NOITA_SKIP_INTRO          touch save00/.../flags/intro_has_played
-    #   NOITA_SKIP_RELEASE_NOTES  write save_shared/config.xml w/ version hash
-    #   NOITA_AUTO_ENABLE_MODS    write save00/mod_config.xml from /noita/mods/*
+    # Optional env var: NOITA_WORLD_SEED=<int> -> SetWorldSeed via harness mod.
     volumes:
       - ./appdata:/appdata
       - ./noita:/noita:ro
-      - ./mods:/noita/mods:ro
+      - ./mods:/user-mods:ro
       - wineprefix:/wineprefix
+    # /noita/mods is a tmpfs so the entrypoint can merge baked-in mods
+    # (/opt/noita-docker-mods, includes the noita-docker-harness mod) with
+    # user-supplied mods (/user-mods) into a single mod search directory
+    # without writing into the read-only /noita bind-mount.
+    tmpfs:
+      - /noita/mods
 
 volumes:
   wineprefix:
