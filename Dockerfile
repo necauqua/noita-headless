@@ -23,13 +23,8 @@ RUN dpkg --add-architecture i386 \
            /usr/share/doc /usr/share/man /usr/share/locale /usr/share/info \
  && mkdir -p /noita /wineprefix /appdata
 
-# Bake the initial wineprefix into the image so the first `compose run` is
-# fast. When an empty *named* volume is mounted to a path that already has
-# content in the image, the runtime copies the image's content into the
-# volume on first mount (existing/non-empty volume -> volume wins, image
-# content is masked). Note this is named-volume-only behavior; a bind mount
-# would mask the baked files even when the host dir is empty.
-# https://docs.docker.com/engine/storage/volumes/#populate-a-volume-using-a-container
+# Bake the initial wineprefix into the image to save on startup time and a
+# little bit of disk space via overlayfs.
 RUN Xvfb :99 -screen 0 1280x720x24 -nolisten tcp & XVFB_PID=$! \
  && wineboot -i \
  && wineserver -w \
@@ -39,8 +34,9 @@ RUN Xvfb :99 -screen 0 1280x720x24 -nolisten tcp & XVFB_PID=$! \
 COPY entrypoint.sh screenshot.sh /
 RUN chmod +x /entrypoint.sh /screenshot.sh
 
-# Harness mod baked into the image. At container start the entrypoint copies
-# it (and symlinks user mods from ./mods) into the /noita/mods tmpfs.
+# Harness mod baked into the image.
+# At container start the entrypoint copies it (and symlinks user mods from
+# ./mods) into the /noita/mods tmpfs.
 COPY noita-docker-harness/ /opt/noita-docker-harness/
 
 WORKDIR /noita

@@ -6,16 +6,10 @@ services:
     #   docker compose run --rm noita -gamemode 0
     # Optional env var: NOITA_WORLD_SEED=<int> -> SetWorldSeed via harness mod.
     volumes:
-      - ./appdata:/appdata
       - ./noita:/noita:ro
       - ./mods:/user-mods:ro
-      - wineprefix:/wineprefix
     # /noita/mods is a tmpfs so the entrypoint can merge baked-in mods
-    # (/opt/noita-docker-mods, includes the noita-docker-harness mod) with
-    # user-supplied mods (/user-mods) into a single mod search directory
-    # without writing into the read-only /noita bind-mount.
+    # (/opt/noita-docker-harness) with user-supplied mods (/user-mods) into
+    # one mod search directory without writing into the read-only /noita.
     tmpfs:
       - /noita/mods
-
-volumes:
-  wineprefix:
