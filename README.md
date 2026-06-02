@@ -40,8 +40,8 @@ just clean      # stops the container and removes the save (use `just stop` to k
 ```
 
 Override variables on the CLI: `just seed=12345 start`,
-`just args="-gamemode 2 -no_logo_splashes" start`, `just name=second start`.
-Run `just` for the full recipe menu.
+`just args="-gamemode 2 -no_logo_splashes" start`, `just name=second start`,
+`just vnc=true start` (see *VNC* below). Run `just` for the full recipe menu.
 
 `name` is used as a container name suffix as well as the key for the
 `noita-appdata-<name>` named volume that persists the save across runs.
@@ -193,6 +193,22 @@ just send mousemove 100 200 click 1
 `screenshot.sh` dumps the current display through `xwd | xwdtopnm | pnmtopng`
 and writes the result to its first arg (or stdout if none). `just screenshot
 [path]` is the host-side wrapper.
+
+### VNC
+
+Setting `NOITA_VNC` (any non-empty value) makes the entrypoint start `x11vnc`
+attached to `:99` on port 5900. `just vnc=true start` does that and adds
+`-p 5900:5900`, so any VNC client (TigerVNC, Remmina, KRDC, …) pointed at
+`localhost:5900` shows the live display and forwards mouse/keyboard.
+
+No password is set — for a remote host, don't publish 5900 directly; SSH-tunnel
+it instead:
+
+```sh
+ssh -L 5900:localhost:5900 user@remote
+```
+
+then connect the VNC client to `localhost:5900` on your local machine.
 
 ## Baking a standalone image
 

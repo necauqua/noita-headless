@@ -11,7 +11,7 @@ RUN dpkg --add-architecture i386 \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
         wine wine32 \
-        xvfb x11-apps xdotool netpbm \
+        xvfb x11-apps xdotool x11vnc netpbm \
         libgl1:i386 libgl1-mesa-dri:i386 \
         tini \
  && rm -rf /var/lib/apt/lists/* \

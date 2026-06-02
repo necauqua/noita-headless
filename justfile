@@ -15,6 +15,10 @@ args := "-gamemode -no_logo_splashes"
 # Optional world seed
 seed := ""
 
+# Set to any non-empty value (e.g. `just vnc=true start`) to run x11vnc inside
+# the container and publish 5900 on the host. No auth -- bind locally or tunnel.
+vnc := ""
+
 # Derived container name
 container := "noita-" + name
 
@@ -35,6 +39,7 @@ build:
         -v {{justfile_directory()}}/mods:/mods:ro \
         -v {{appdata}}:/appdata \
         {{ if seed != "" { "-e NOITA_WORLD_SEED=" + seed } else { "" } }} \
+        {{ if vnc != "" { "-e NOITA_VNC=1 -p 5900:5900" } else { "" } }} \
         noita-headless {{args}}
 
 # Wait until the harness mod signals readiness, or fail after `timeout` seconds

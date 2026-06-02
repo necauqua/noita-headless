@@ -15,6 +15,14 @@ Xvfb :99 -screen 0 1280x720x24 -nolisten tcp &
 XVFB_PID=$!
 trap 'kill "$XVFB_PID" 2>/dev/null' EXIT
 
+# Optional VNC server attached to :99. No password -- expose the port only
+# locally or over an SSH tunnel.
+if [ -n "$NOITA_VNC" ]; then
+    until [ -S /tmp/.X11-unix/X99 ]; do sleep 0.05; done
+    log "starting x11vnc on :5900"
+    x11vnc -display :99 -forever -shared -nopw -quiet -rfbport 5900 &
+fi
+
 # Point %APPDATA%\..\LocalLow (where Noita stores save data) at /appdata,
 # so an optional -v <vol>:/appdata persists saves across container lifecycles.
 USER_DIR="$WINEPREFIX/drive_c/users/$(whoami)"
