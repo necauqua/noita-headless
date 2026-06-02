@@ -32,14 +32,14 @@ appdata := "noita-appdata-" + name
 build:
     docker build -t noita-headless .
 
-# Start Noita detached. Honors `args`, `seed`, and `name`.
-@start:
+# Start a detached Noita container
+@start path=`just locate-noita`:
     docker run --rm -d --name {{container}} \
-        -v {{justfile_directory()}}/noita:/noita:ro \
+        -v {{path}}:/noita:ro \
         -v {{justfile_directory()}}/mods:/mods:ro \
         -v {{appdata}}:/appdata \
         {{ if seed != "" { "-e NOITA_WORLD_SEED=" + seed } else { "" } }} \
-        {{ if vnc != "" { "-e NOITA_VNC=1 -p 5900:5900" } else { "" } }} \
+        {{ if vnc != "" { "-e NOITA_VNC=1 -p localhost:5900:5900" } else { "" } }} \
         noita-headless {{args}}
 
 # Wait until the harness mod signals readiness, or fail after `timeout` seconds
@@ -64,17 +64,17 @@ logs:
     docker logs -f {{container}}
 
 # Gracefully stop the container in a way that allows Noita a chance to write the save
-stop:
+stop timeout="10":
     @-docker exec {{container}} xdotool search --name Noita key --window %@ alt+F4 2>/dev/null
-    @timeout 10 sh -c 'while docker exec {{container}} pidof noita.exe >/dev/null 2>&1; do sleep 0.1; done'
+    @timeout {{timeout}} sh -c 'while docker exec {{container}} pidof noita.exe >/dev/null 2>&1; do sleep 0.1; done'
     -docker stop {{container}} 2>/dev/null
 
 # Stop the container and drop its appdata volume
-clean: stop
+reset: stop
     -docker volume rm {{appdata}} 2>/dev/null
 
 # Bake a standalone image that works without bind mounts
-bake src="./noita" tag="noita-headless-baked": build
+bake tag="" path=`just locate-noita`: build
     rm -rf .bake-context
     mkdir -p .bake-context
     rsync -a \
@@ -82,6 +82,43 @@ bake src="./noita" tag="noita-headless-baked": build
         --exclude=mods \
         --include='Master Bank*.bank' \
         --exclude='*.bank' \
-        {{src}}/ .bake-context/noita/
-    docker build -t {{tag}} -f Dockerfile.bake .bake-context
+        {{path}}/ .bake-context/noita/
+    docker build \
+        -t {{ if tag != "" { tag } else { "noita-headless:" + `just extract-version-date` } }} \
+        -f Dockerfile.bake \
+        .bake-context
     rm -rf .bake-context
+
+# Try to find Noita installed in your Steam library
+[private]
+locate-noita:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    vdf="$HOME/.steam/steam/steamapps/libraryfolders.vdf"
+    [[ ! -f "$vdf" ]] && vdf="$HOME/.local/share/Steam/steamapps/libraryfolders.vdf"
+
+    found=$(awk -v app="881100" '
+    /"path"/ {
+        gsub(/["\t ]/, "", $2)
+        path = $2 "/steamapps"
+        if (system("test -d \"" path "\"") == 0) {
+            current_path = path
+        }
+    }
+    current_path && $0 ~ "\"" app "\"" {
+        print current_path "/common"
+        exit
+    }' "$vdf")
+
+    if [[ -z "$found" ]]; then
+        echo "Noita Steam location not found; Specify location manually via the path= parameter" >&2
+        exit 1
+    fi
+
+    echo "$found/Noita"
+
+[private]
+@extract-version-date:
+    strings "{{ `just locate-noita` }}/noita.exe" \
+        | perl -lne 'print lc($1 =~ s/ /-/gr) if /^Noita - Build (.+?) -/'

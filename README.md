@@ -14,29 +14,27 @@ code in a real running Noita engine.
 ├── screenshot.sh             # xwd -> pnm -> png from the in-container Xvfb display
 ├── justfile                  # parameterized recipes for common operations
 ├── noita-docker-harness/     # mod baked into the image (see *Harness mod*)
-├── noita/                    # the game folder (mounted read-only) -- bring your own
 └── mods/<id>/                # user mods (host-side; merged into /app/mods at start)
 ```
-
-`noita/` is gitignored; `mods/` ships the example `test-mod`.
 
 ## Prerequisites
 
 - Docker or Podman
-- A Noita install in `./noita/` (the folder containing `noita.exe`, `data/`,
-  `_version_hash.txt`, etc.)
+- A Noita install in a known location (Steam or otherwise)
 - Optional: [`just`](https://github.com/casey/just) for the recipes below.
   Without it everything still works via plain `docker build` / `docker run`.
 
 ## Quick start (with just)
 
 ```sh
-just build
-just start wait # runs the container and waits until the world is loaded
+just build # needed once
+
+just start      # start the container
+just wait       # wait until the world is loaded
 sleep 4         # a little bit of extra wait for the initial fade in
-just screenshot # captures the screen to shot.png
-open shot.png   # view it
-just clean      # stops the container and removes the save (use `just stop` to keep the save)
+just screenshot # capture the screen to shot.png
+open shot.png   # and view it
+just reset      # stop the container and remove the appdata volume (use `just stop` to keep the save)
 ```
 
 Override variables on the CLI: `just seed=12345 start`,
@@ -54,18 +52,18 @@ docker build -t noita-headless .
 
 # Minimum: just bind your Noita install, the save is not preserved.
 docker run --rm -d --name noita \
-    -v "$PWD/noita:/noita:ro" \
+    -v "$NOITA_INSTALL:/noita:ro" \
     noita-headless -gamemode -no_logo_splashes
 
 # Bind a folder of mods to be installed into the game:
 docker run --rm -d --name noita \
-    -v "$PWD/noita:/noita:ro" \
+    -v "$NOITA_INSTALL:/noita:ro" \
     -v "$PWD/mods:/mods:ro" \
     noita-headless
 
 # Add a bind mount volume so saves persist across `--rm` cycles (optional):
 docker run --rm -d --name noita \
-    -v "$PWD/noita:/noita:ro" \
+    -v "$NOITA_INSTALL:/noita:ro" \
     -v noita-appdata-default:/appdata \
     noita-headless
 
@@ -77,7 +75,7 @@ docker exec noita /screenshot.sh > shot.png
 docker stop noita 
 ```
 
-Only `/noita` is required. `/mods` and `/appdata` are both optional —
+Only the `/noita` bind is required. `/mods` and `/appdata` are both optional —
 without `/appdata` the save lives in the container's writable layer and goes
 away with `--rm`.
 
@@ -216,15 +214,15 @@ Note that this is a questionable thing to do and you *definitely* shouldn't
 redistribute such an image.
 
 `just bake` builds a self-contained image (default tag: `noita-headless-baked`)
-that doesn't need the `-v <path>:/noita` bind at run time. It rsyncs `./noita`
-(or `src=<path>`) into a temp build context, drops `tools_modding/`, `mods/`,
+that doesn't need the `-v <path>:/noita` bind at run time. It rsyncs your Noita
+installation into a temp build context, dropping `tools_modding/`, `mods/`,
 and `**.bank` audio (~1.2 GB of dead weight in a no-audio container), then
 layers it on top of `noita-headless`.
 
 ```sh
 just bake                          # → localhost/noita-headless-baked
-just bake src=/path/to/noita
-just bake tag=noita-headless-myrun
+just bake path=/path/to/noita
+just bake tag=custom-image-tag
 ```
 
 `Master Bank.bank` + `Master Bank.strings.bank` (~2.4 MB) are kept even
@@ -234,12 +232,10 @@ With the metadata banks present, FMOD's event-lookup table is populated and
 the only error noise left is ~15 startup-only `File not found` notices for
 the missing sub-banks.
 
-Running the baked image needs no `/noita` mount:
+Running the baked image does not need the `/noita` mount (the whole point):
 
 ```sh
-docker run --rm -d --name noita \
-    -v noita-appdata-default:/appdata \
-    noita-headless-baked
+docker run --rm -d --name noita noita-headless:baked
 ```
 
 The justfile's `start` recipe still bind-mounts `./noita`, so it's tied to
@@ -253,15 +249,15 @@ above.
 | recipe | what it does |
 |---|---|
 | `just build` | `docker build -t noita-headless .` |
-| `just bake [src=…] [tag=…]` | build a standalone image with noita baked in (no `-v …:/noita` needed) |
-| `just start` | run the container detached (`args`, `seed`, `name` honored) |
-| `just wait [timeout]` | poll `/app/player_ready` via `docker exec`, fail after `timeout` (default 120 s) |
+| `just bake [tag=…]` | build a standalone image with noita baked in (no `-v …:/noita` needed) |
+| `just start` | run the container, detached |
+| `just wait [timeout]` | poll `/app/player_ready` via `docker exec`, fail after `timeout` (default 120s) |
 | `just screenshot [path]` | write the current frame to `path` (default `./shot.png`) |
 | `just send …` | run xdotool inside the container, args passed through |
-| `just list` | running noita containers |
+| `just list` | list running noita containers |
 | `just logs` | `docker logs -f` the container |
 | `just stop` | graceful shutdown: alt+F4 to noita, wait for `noita.exe` to exit, `docker stop` fallback — gives noita a chance to save |
-| `just clean` | `stop` then drop the `noita-appdata-{{name}}` volume |
+| `just reset` | `stop` then drop the `noita-appdata-{{name}}` volume |
 
 ## AI Assistance
 
