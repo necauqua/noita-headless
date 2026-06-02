@@ -19,6 +19,7 @@ RUN dpkg --add-architecture i386 \
         wine wine32 \
         xvfb x11-apps xdotool netpbm \
         libgl1:i386 libgl1-mesa-dri:i386 \
+        tini \
  && rm -rf /var/lib/apt/lists/* \
            /usr/share/doc /usr/share/man /usr/share/locale /usr/share/info \
  && mkdir -p /noita /wineprefix /appdata
@@ -34,10 +35,9 @@ RUN Xvfb :99 -screen 0 1280x720x24 -nolisten tcp & XVFB_PID=$! \
 COPY entrypoint.sh screenshot.sh /
 RUN chmod +x /entrypoint.sh /screenshot.sh
 
-# Harness mod baked into the image.
-# At container start the entrypoint copies it (and symlinks user mods from
-# ./mods) into the /noita/mods tmpfs.
+# Harness mod baked into the image. The entrypoint copies it (alongside the
+# user's mods from /mods) into /app/mods at container start.
 COPY noita-docker-harness/ /opt/noita-docker-harness/
 
-WORKDIR /noita
-ENTRYPOINT ["/entrypoint.sh"]
+# tini makes SIGTERM sent via `docker stop` to actually work
+ENTRYPOINT ["/usr/bin/tini", "--", "/entrypoint.sh"]

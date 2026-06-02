@@ -1,13 +1,25 @@
 #!/bin/sh
 set -e
 
-# One long-lived Xvfb for the whole container lifetime
+# Clear any stale signal from a prior run so the host can wait on its
+# (re)appearance to detect this run's player-spawn.
+rm -f /appdata/player_ready
+
+log() { echo "[noita-docker] $*"; }
+
+if [ ! -f /noita/noita.exe ]; then
+    log "ERROR: /noita does not contain noita.exe. Mount the game folder:"
+    log "  docker run -v \"\$PWD/noita:/noita:ro\" ... noita-headless"
+    exit 1
+fi
+
+log "starting Xvfb on :99"
 Xvfb :99 -screen 0 1280x720x24 -nolisten tcp &
 XVFB_PID=$!
 trap 'kill "$XVFB_PID" 2>/dev/null' EXIT
 
-# Point %APPDATA%\..\LocalLow (where Noita stores its save data) at /appdata,
-# so mounting -v ./appdata:/appdata persists saves independently of the prefix.
+# Point %APPDATA%\..\LocalLow (where Noita stores save data) at /appdata,
+# so an optional -v <vol>:/appdata persists saves across container lifecycles.
 USER_DIR="$WINEPREFIX/drive_c/users/$(whoami)"
 mkdir -p "$USER_DIR/AppData"
 if [ ! -L "$USER_DIR/AppData/LocalLow" ]; then
@@ -15,24 +27,32 @@ if [ ! -L "$USER_DIR/AppData/LocalLow" ]; then
     ln -s /appdata "$USER_DIR/AppData/LocalLow"
 fi
 
-# Populate /noita/mods (tmpfs, see compose.yaml) from two sources:
-#   /opt/noita-docker-harness  baked into the image at build time
-#   /user-mods                 the host's ./mods bind-mount (read-only)
-# The harness is copied (entrypoint writes runtime_config.lua into it below).
-# User mods are symlinked so edits on the host are picked up without rebuild.
-# Wipe first: under podman the tmpfs is pre-populated with the bundled mods
-# from the underlying /noita/mods bind (Docker hides them instead). Either
-# way we want /noita/mods to contain only what we put here.
-rm -rf /noita/mods/*
-cp -r /opt/noita-docker-harness /noita/mods/
-for src in /user-mods/*/; do
+# Build a writable mirror of /noita at /app using symlinks: each file in
+# /app is a symlink to the corresponding /noita file (so wine reads them
+# straight from the host bind), but directories are real. This lets us own
+# /app/mods (rm + repopulate) without needing tmpfs/mount privileges or a
+# writable /noita bind. The whole /app dir lives in the container's writable
+# layer; with --rm it goes away with the container.
+log "mirroring /noita -> /app"
+cp -rs /noita /app
+rm -rf /app/mods/*
+cp -r /opt/noita-docker-harness /app/mods/
+user_mods=0
+for src in /mods/*/; do
     [ -d "$src" ] || continue
-    ln -sfn "$src" "/noita/mods/$(basename "$src")"
+    ln -sfn "$src" "/app/mods/$(basename "$src")"
+    user_mods=$((user_mods + 1))
 done
+log "mods: harness + $user_mods user mod(s)"
 
 # Pre-seeding save state:
 
 NOITA_DIR=/appdata/Nolla_Games_Noita
+if [ -d "$NOITA_DIR/save00/world" ]; then
+    log "appdata: prior save present ($(find "$NOITA_DIR/save00/world" -type f 2>/dev/null | wc -l) world files)"
+else
+    log "appdata: no prior save"
+fi
 mkdir -p "$NOITA_DIR/save00/persistent/flags" "$NOITA_DIR/save_shared"
 
 # Skip the first-game cutscene.
@@ -53,11 +73,11 @@ cat > "$NOITA_DIR/save_shared/config.xml" <<EOF
 />
 EOF
 
-# Auto-enable every mod under /noita/mods (the harness + everything from
+# Auto-enable every mod under /app/mods (the harness + everything from
 # ./mods). Mod id from <dir>/mod_id.txt if present, else the dir name.
 {
     echo '<Mods>'
-    for mod_dir in /noita/mods/*/; do
+    for mod_dir in /app/mods/*/; do
         [ -d "$mod_dir" ] || continue
         if [ -f "${mod_dir}mod_id.txt" ]; then
             mod_id=$(tr -d '[:space:]' < "${mod_dir}mod_id.txt")
@@ -69,17 +89,14 @@ EOF
     echo '</Mods>'
 } > "$NOITA_DIR/save00/mod_config.xml"
 
-# Clear any stale signal from a prior run so the host can wait on its
-# (re)appearance to detect this run's player-spawn.
-rm -f /appdata/player_ready
-
 # Harness mod runtime config. Lua syntax: unset NOITA_WORLD_SEED -> seed = nil
 # (no override); set to an int -> SetWorldSeed(<int>).
-cat > /noita/mods/noita-docker-harness/runtime_config.lua <<EOF
+cat > /app/mods/noita-docker-harness/runtime-config.lua <<EOF
 return {
   seed = ${NOITA_WORLD_SEED:-nil},
 }
 EOF
 
-cd /noita
+log "launching: wine noita.exe $*"
+cd /app
 exec wine noita.exe "$@"

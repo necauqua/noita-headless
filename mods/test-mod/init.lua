@@ -5,5 +5,5 @@ function OnWorldPreUpdate()
     gui = GuiCreate()
   end
   GuiStartFrame(gui)
-  GuiText(gui, 10, 10, 'test mod loaded')
+  GuiText(gui, 5, 5, 'test mod loaded')
 end

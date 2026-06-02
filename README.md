@@ -9,25 +9,25 @@ code in a real running Noita engine.
 ```
 .
 ├── Dockerfile                # debian:bookworm-slim + wine32 + Xvfb + Mesa llvmpipe
-├── compose.yaml              # one service `noita`, mounts `./noita` and `./mods`
-├── entrypoint.sh             # Xvfb, AppData link, mod merge, save pre-seed, run noita.exe
+├── entrypoint.sh             # Xvfb, AppData link, /noita -> /app mirror, save pre-seed, run noita.exe
 ├── screenshot.sh             # xwd -> pnm -> png from the in-container Xvfb display
 ├── justfile                  # parameterized recipes for common operations
 ├── noita-docker-harness/     # mod baked into the image (see *Harness mod*)
 ├── noita/                    # the game folder (mounted read-only) -- bring your own
-└── mods/<id>/                # user mods (host-side; merged into /noita/mods at start)
+└── mods/<id>/                # user mods (host-side; merged into /app/mods at start)
 ```
 
 `noita/` is gitignored; `mods/` ships the example `test-mod`.
 
 ## Prerequisites
 
-- Docker or Podman with the compose plugin
-- [`just`](https://github.com/casey/just) — recipes for common operations
+- Docker or Podman
 - A Noita install in `./noita/` (the folder containing `noita.exe`, `data/`,
   `_version_hash.txt`, etc.)
+- Optional: [`just`](https://github.com/casey/just) for the recipes below.
+  Without it everything still works via plain `docker build` / `docker run`.
 
-## Quick start
+## Quick start (with just)
 
 ```sh
 just build
@@ -36,12 +36,43 @@ just screenshot # writes ./shot.png
 just clean      # stops the container and removes the save (use `just stop` to keep the save)
 ```
 
-Override `just` variables like that: `just seed=12345 start`,
+Override variables on the CLI: `just seed=12345 start`,
 `just args="-gamemode 2 -no_logo_splashes" start`, `just name=second start`.
 Run `just` for the full recipe menu.
 
-`name` is used as a container name suffix, as well as for the named appdata
-volumes.
+`name` is used as a container name suffix as well as the key for the
+`noita-appdata-<name>` named volume that persists the save across runs.
+Distinct names → independent containers and independent saves.
+
+## Quick start (without just)
+
+```sh
+docker build -t noita-headless .
+
+# Minimum: just bind your Noita install. Saves are ephemeral (--rm wipes them).
+docker run --rm -d --name noita \
+    -v "$PWD/noita:/noita:ro" \
+    noita-headless -gamemode -no_logo_splashes
+
+# Add a host folder of mods (optional):
+docker run --rm -d --name noita \
+    -v "$PWD/noita:/noita:ro" \
+    -v "$PWD/mods:/mods:ro" \
+    noita-headless
+
+# Add a named volume so saves persist across `--rm` cycles (optional):
+docker run --rm -d --name noita \
+    -v "$PWD/noita:/noita:ro" \
+    -v noita-appdata-default:/appdata \
+    noita-headless
+
+docker exec noita /screenshot.sh > shot.png
+docker rm -f --time 0 noita
+```
+
+Only `/noita` is required. `/mods` and `/appdata` are both optional —
+without `/appdata` the save lives in the container's writable layer and goes
+away with `--rm`.
 
 ## How it works
 
@@ -78,19 +109,29 @@ Before launching the game, `entrypoint.sh` writes a handful of files into
   from `mod_id.txt` if present, else the directory name.
 
 The `AppData/LocalLow` directory inside the wineprefix is a symlink to
-`/appdata`, which could be persisted with a named volume.
+`/appdata`. With no `-v` mount at `/appdata` the save lives in the writable
+container layer (ephemeral under `--rm`). With `-v <vol>:/appdata` it
+persists across container lifecycles.
 
-### Mods
+### Mods (and `/noita` → `/app` mirror)
 
-`/noita/mods` is a **tmpfs** owned by the container. The entrypoint
-populates it from two sources:
+The `/noita` bind is read-only, so the entrypoint can't write a mods folder
+into it. Instead it builds a writable mirror at `/app` with `cp -rs /noita
+/app`: every file in `/app` is a symbolic link to the corresponding
+`/noita` file (wine still reads them directly from the host bind), but
+directories are real, so `/app/mods` can be wiped and repopulated freely.
+The mirror lives in the container's writable layer — under `--rm` it goes
+away with the container. Works under docker and podman (rootless), no
+tmpfs/mount privileges needed.
 
-- `/opt/noita-docker-harness/` — baked into the image at build time. Copied in
-  so the entrypoint can write `runtime_config.lua` into it (see *Harness mod*
-  below).
-- `/user-mods/` — the host's `./mods` bind-mounted read-only. Each subdir
-  is symlinked into `/noita/mods/`, so edits on the host are picked up on
-  the next container start without a rebuild.
+After mirroring, the entrypoint wipes `/app/mods` and fills it from:
+
+- `/opt/noita-docker-harness/` — baked into the image at build time. Copied
+  in so the entrypoint can write `runtime-config.lua` into it (see *Harness
+  mod* below).
+- `/mods/` — the host's `./mods` (or whatever you bind to `/mods`)
+  read-only. Each subdir is symlinked into `/app/mods/`, so edits on the
+  host are picked up on the next container start without a rebuild.
 
 For each resulting subdir, the entrypoint takes the id from `mod_id.txt` if
 present, else the directory name, and writes a corresponding
@@ -114,7 +155,7 @@ few things:
   `SetWorldSeed(<seed>)`.
 
 Env vars are not visible to Noita's Lua directly; the entrypoint writes a
-small `runtime_config.lua` next to `init.lua` at start, and the mod
+small `runtime-config.lua` next to `init.lua` at start, and the mod
 `dofile_once`s it.
 
 ### Input + screenshots
@@ -123,8 +164,8 @@ small `runtime_config.lua` next to `init.lua` at start, and the mod
 against `:99`:
 
 ```sh
-just xdotool key Escape
-just xdotool mousemove 100 200 click 1
+just send key Escape
+just send mousemove 100 200 click 1
 ```
 
 `screenshot.sh` dumps the current display through `xwd | xwdtopnm | pnmtopng`
@@ -133,28 +174,19 @@ and writes the result to its first arg (or stdout if none). `just screenshot
 
 ## Commands
 
-Running just `just` will list the recipes. Highlights:
+`just` lists the menu. Highlights:
 
 | recipe | what it does |
 |---|---|
-| `just build` | `docker compose build` |
-| `just run` | start the container detached (`args`, `seed`, `name` honored) |
+| `just build` | `docker build -t noita-headless .` |
+| `just start` | run the container detached (`args`, `seed`, `name` honored) |
 | `just wait [timeout]` | poll `/appdata/player_ready` via `docker exec`, fail after `timeout` (default 120 s) |
-| `just start` | `run` then `wait` |
 | `just screenshot [path]` | write the current frame to `path` (default `./shot.png`) |
-| `just xdotool …` | run xdotool inside the container, args passed through |
+| `just send …` | run xdotool inside the container, args passed through |
 | `just list` | running noita containers |
 | `just logs` | `docker logs -f` the container |
-| `just stop` | stop the container |
-| `just clean` | stop the container, dropping the `noita-appdata-{{name}}` |
-
-Just variables can be overridden:
-
-```sh
-just args="-gamemode 0 -no_logo_splashes" run # explicit noita.exe args (matches the default)
-just seed=12345 start                         # set the seed 12345
-just name=noita-test start                    # parallel runs with distinct names
-```
+| `just stop` | kill + remove the container (saves stay in the volume) |
+| `just clean` | `stop` then drop the `noita-appdata-{{name}}` volume |
 
 ## AI Assistance
 
