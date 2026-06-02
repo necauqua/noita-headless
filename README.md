@@ -1,4 +1,4 @@
-# noita-docker
+# noita-headless
 
 Run [Noita](https://noitagame.com/) headless in a container — Wine + Xvfb + Mesa
 software OpenGL, without a GPU. Can be used for automated tests or to run Lua
@@ -9,6 +9,7 @@ code in a real running Noita engine.
 ```
 .
 ├── Dockerfile                # debian:bookworm-slim + wine32 + Xvfb + Mesa llvmpipe
+├── Dockerfile.bake           # extends `noita-headless` with the noita install baked in (used by `just bake`)
 ├── entrypoint.sh             # Xvfb, AppData link, /noita -> /app mirror, save pre-seed, run noita.exe
 ├── screenshot.sh             # xwd -> pnm -> png from the in-container Xvfb display
 ├── justfile                  # parameterized recipes for common operations
@@ -31,8 +32,10 @@ code in a real running Noita engine.
 
 ```sh
 just build
-just start      # runs the container and waits until the player has spawned
-just screenshot # writes ./shot.png
+just start wait # runs the container and waits until the world is loaded
+sleep 4         # a little bit of extra wait for the initial fade in
+just screenshot # captures the screen to shot.png
+open shot.png   # view it
 just clean      # stops the container and removes the save (use `just stop` to keep the save)
 ```
 
@@ -49,25 +52,29 @@ Distinct names → independent containers and independent saves.
 ```sh
 docker build -t noita-headless .
 
-# Minimum: just bind your Noita install. Saves are ephemeral (--rm wipes them).
+# Minimum: just bind your Noita install, the save is not preserved.
 docker run --rm -d --name noita \
     -v "$PWD/noita:/noita:ro" \
     noita-headless -gamemode -no_logo_splashes
 
-# Add a host folder of mods (optional):
+# Bind a folder of mods to be installed into the game:
 docker run --rm -d --name noita \
     -v "$PWD/noita:/noita:ro" \
     -v "$PWD/mods:/mods:ro" \
     noita-headless
 
-# Add a named volume so saves persist across `--rm` cycles (optional):
+# Add a bind mount volume so saves persist across `--rm` cycles (optional):
 docker run --rm -d --name noita \
     -v "$PWD/noita:/noita:ro" \
     -v noita-appdata-default:/appdata \
     noita-headless
 
 docker exec noita /screenshot.sh > shot.png
-docker rm -f --time 0 noita
+
+# This will most likely not properly write the save if you bind-mount
+# appdata as described above - in my experience the best result was actually
+# sending alt+f4 to it via xdotool, see the `just stop` recipe.
+docker stop noita 
 ```
 
 Only `/noita` is required. `/mods` and `/appdata` are both optional —
@@ -85,14 +92,26 @@ deterministic.
 
 ### Wine
 
-A 32-bit prefix (`WINEARCH=win32`) lives at `/wineprefix` and is baked into
-the image (`wineboot -i` runs during build) to avoid the per-start `wineboot`
-cost.
+A 32-bit prefix (`WINEARCH=win32`) is baked into the image at `/wineprefix`
+(`wineboot -i` runs during build). Nothing is mounted there at runtime —
+each `--rm` container gets a fresh copy via its writable layer. The
+container's PID 1 is `tini`, which forwards `SIGTERM` to wine so `docker
+stop` actually reaches noita.
 
-`WINEDLLOVERRIDES` disables three DLLs: `mscoree`/`mshtml` (skip the .NET +
-Gecko download prompt) and `winealsa.drv` (no audio device exists in the
-container; not loading the ALSA bridge keeps libasound2 from spamming
-`cannot find card '0'`).
+### Audio
+
+Wine and FMOD spam the log with init-failure noise when they can't find an
+audio device, so `/etc/asound.conf` configures a null sink and audio "works",
+making the error logs go away.
+
+### Logging
+
+The harness mod ships `magic-numbers.xml` (credit to
+[Enable Logger](https://steamcommunity.com/sharedfiles/filedetails/?id=2124936579))
+that tunes Noita logger to be slightly less useless.
+
+The entrypoint runs `tail -F /app/logger.txt` in the background, so Noita's
+runtime log shows up in `docker logs`.
 
 ### Save pre-seeding
 
@@ -104,7 +123,7 @@ Before launching the game, `entrypoint.sh` writes a handful of files into
   game's `_version_hash.txt` (skips the "Welcome to Noita Update" popup) and
   `mods_sandbox_enabled="0"` (lets the harness mod use unsandboxed Lua to write
   the `player_ready` signal) + the disclaimer-dismissed flags.
-- `save00/mod_config.xml` enabling every directory under `/noita/mods/` —
+- `save00/mod_config.xml` enabling every directory under `/app/mods/` —
   i.e. the harness plus everything the user put in `./mods/`. Mod id comes
   from `mod_id.txt` if present, else the directory name.
 
@@ -115,14 +134,14 @@ persists across container lifecycles.
 
 ### Mods (and `/noita` → `/app` mirror)
 
-The `/noita` bind is read-only, so the entrypoint can't write a mods folder
-into it. Instead it builds a writable mirror at `/app` with `cp -rs /noita
-/app`: every file in `/app` is a symbolic link to the corresponding
-`/noita` file (wine still reads them directly from the host bind), but
-directories are real, so `/app/mods` can be wiped and repopulated freely.
-The mirror lives in the container's writable layer — under `--rm` it goes
-away with the container. Works under docker and podman (rootless), no
-tmpfs/mount privileges needed.
+The `/noita` bind is read-only, so we cant edit the mods folder and Noita can't
+write logs at the very least.
+
+So we build a symlink tree at `/app` inside of the container instead.
+
+The read-only bind ensures the container does not modify the Noita instance
+that was given to it, and you can point it directly at your Steam installation
+without fearing any issues.
 
 After mirroring, the entrypoint wipes `/app/mods` and fills it from:
 
@@ -145,14 +164,17 @@ present, else the directory name, and writes a corresponding
 `noita-docker-harness/` (top-level) is baked into the image and helps with a
 few things:
 
-- **Player-spawn signal.** `OnPlayerSpawned` writes `/appdata/player_ready`
-  (via Wine's `Z:\` path). The file appears the instant the player entity
-  exists — fastest reliable "in-game, ready" signal. The entrypoint deletes
-  any stale file before launch, so its appearance is unambiguous per run.
-  Use `just wait`, which polls `docker exec {{name}} test -e /appdata/player_ready`
-  (since the appdata volume isn't visible on the host filesystem).
+- **Ready signal.** `OnWorldPreUpdate` writes `/app/player_ready` the
+  first frame the world is up, then sets itself to `nil` (fire-once). We
+  use `OnWorldPreUpdate` rather than `OnPlayerSpawned` because the latter
+  doesn't fire when the player entity is loaded from a save. The entrypoint
+  deletes any stale file before launch, so its appearance is unambiguous
+  per run. Use `just wait`, which polls
+  `docker exec {{container}} test -e /app/player_ready` (the appdata
+  volume isn't visible on the host filesystem).
 - **Seed override.** `NOITA_WORLD_SEED=<seed>` being set calls
   `SetWorldSeed(<seed>)`.
+- **Enables Noita's logger.** See *Logging* above.
 
 Env vars are not visible to Noita's Lua directly; the entrypoint writes a
 small `runtime-config.lua` next to `init.lua` at start, and the mod
@@ -172,6 +194,42 @@ just send mousemove 100 200 click 1
 and writes the result to its first arg (or stdout if none). `just screenshot
 [path]` is the host-side wrapper.
 
+## Baking a standalone image
+
+Note that this is a questionable thing to do and you *definitely* shouldn't
+redistribute such an image.
+
+`just bake` builds a self-contained image (default tag: `noita-headless-baked`)
+that doesn't need the `-v <path>:/noita` bind at run time. It rsyncs `./noita`
+(or `src=<path>`) into a temp build context, drops `tools_modding/`, `mods/`,
+and `**.bank` audio (~1.2 GB of dead weight in a no-audio container), then
+layers it on top of `noita-headless`.
+
+```sh
+just bake                          # → localhost/noita-headless-baked
+just bake src=/path/to/noita
+just bake tag=noita-headless-myrun
+```
+
+`Master Bank.bank` + `Master Bank.strings.bank` (~2.4 MB) are kept even
+though `*.bank` is otherwise excluded — without them noita's audio.cpp
+hammers `Code: 74 — could not be found` thousands of lines per session.
+With the metadata banks present, FMOD's event-lookup table is populated and
+the only error noise left is ~15 startup-only `File not found` notices for
+the missing sub-banks.
+
+Running the baked image needs no `/noita` mount:
+
+```sh
+docker run --rm -d --name noita \
+    -v noita-appdata-default:/appdata \
+    noita-headless-baked
+```
+
+The justfile's `start` recipe still bind-mounts `./noita`, so it's tied to
+the `noita-headless` image; run the baked one with plain `docker run` as
+above.
+
 ## Commands
 
 `just` lists the menu. Highlights:
@@ -179,13 +237,14 @@ and writes the result to its first arg (or stdout if none). `just screenshot
 | recipe | what it does |
 |---|---|
 | `just build` | `docker build -t noita-headless .` |
+| `just bake [src=…] [tag=…]` | build a standalone image with noita baked in (no `-v …:/noita` needed) |
 | `just start` | run the container detached (`args`, `seed`, `name` honored) |
-| `just wait [timeout]` | poll `/appdata/player_ready` via `docker exec`, fail after `timeout` (default 120 s) |
+| `just wait [timeout]` | poll `/app/player_ready` via `docker exec`, fail after `timeout` (default 120 s) |
 | `just screenshot [path]` | write the current frame to `path` (default `./shot.png`) |
 | `just send …` | run xdotool inside the container, args passed through |
 | `just list` | running noita containers |
 | `just logs` | `docker logs -f` the container |
-| `just stop` | kill + remove the container (saves stay in the volume) |
+| `just stop` | graceful shutdown: alt+F4 to noita, wait for `noita.exe` to exit, `docker stop` fallback — gives noita a chance to save |
 | `just clean` | `stop` then drop the `noita-appdata-{{name}}` volume |
 
 ## AI Assistance

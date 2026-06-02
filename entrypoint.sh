@@ -1,15 +1,12 @@
 #!/bin/sh
 set -e
 
-# Clear any stale signal from a prior run so the host can wait on its
-# (re)appearance to detect this run's player-spawn.
-rm -f /appdata/player_ready
-
 log() { echo "[noita-docker] $*"; }
 
 if [ ! -f /noita/noita.exe ]; then
-    log "ERROR: /noita does not contain noita.exe. Mount the game folder:"
-    log "  docker run -v \"\$PWD/noita:/noita:ro\" ... noita-headless"
+    log "ERROR: /noita does not contain noita.exe. Either:"
+    log "  - mount the game folder: docker run -v \"\$PWD/noita:/noita:ro\" ... noita-headless"
+    log "  - or use a baked image (built via 'just bake') which doesn't need this mount"
     exit 1
 fi
 

@@ -8,8 +8,8 @@ if config.seed then
 end
 
 function OnWorldPreUpdate()
-  -- Z:\ is Wine's mapping of the host root, so this writes to /appdata on the
-  -- host (which is a docker container with /appdata being there).
-  io.open([[Z:\appdata\player_ready]], "w"):close()
+  -- Z:\ is wine's mapping of the container filesystem root, so this writes
+  -- to /appdata inside the container (where the appdata volume is mounted).
+  io.open([[Z:\app\player_ready]], "w"):close()
   OnWorldPreUpdate = nil
 end

@@ -26,7 +26,7 @@ RUN Xvfb :99 -screen 0 1280x720x24 -nolisten tcp & XVFB_PID=$! \
  && kill $XVFB_PID \
  && rm -rf /tmp/.X* /tmp/wine-*
 
-# Configure ALSA with a null device so there is "an audio device" and we dont
+# Configure ALSA with a null device so there is "an audio device" and we don't
 # get giga spammed by ALSA/FMOD errors about not having sound in the container
 RUN printf 'pcm.!default { type null }\nctl.!default { type null }\n' > /etc/asound.conf
 

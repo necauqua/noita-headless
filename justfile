@@ -39,7 +39,7 @@ build:
 
 # Wait until the harness mod signals readiness, or fail after `timeout` seconds
 @wait timeout="120":
-    timeout {{timeout}} sh -c 'until docker exec {{container}} test -e /appdata/player_ready 2>/dev/null; do sleep 0.1; done' \
+    timeout {{timeout}} sh -c 'until docker exec {{container}} test -e /app/player_ready 2>/dev/null; do sleep 0.1; done' \
         || { echo "timed out after {{timeout}}s; check 'just logs'" >&2; exit 1; }
 
 # Dump the current frame to `path` (default ./shot.png)
