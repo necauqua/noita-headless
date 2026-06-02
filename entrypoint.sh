@@ -27,15 +27,16 @@ if [ ! -L "$USER_DIR/AppData/LocalLow" ]; then
     ln -s /appdata "$USER_DIR/AppData/LocalLow"
 fi
 
-# Build a writable mirror of /noita at /app using symlinks: each file in
-# /app is a symlink to the corresponding /noita file (so wine reads them
-# straight from the host bind), but directories are real. This lets us own
-# /app/mods (rm + repopulate) without needing tmpfs/mount privileges or a
-# writable /noita bind. The whole /app dir lives in the container's writable
-# layer; with --rm it goes away with the container.
+# Build a writable mirror of /noita at /app using symlinks.
+# This lets us edit /app/mods, keeping /noita bind readonly, as well as lets
+# Noita itself write to logger.txt etc
 log "mirroring /noita -> /app"
 cp -rs /noita /app
-rm -rf /app/mods/*
+
+# make sure mods is an empty folder that does exist
+rm -rf /app/mods
+mkdir -p /app/mods
+
 cp -r /opt/noita-docker-harness /app/mods/
 user_mods=0
 for src in /mods/*/; do

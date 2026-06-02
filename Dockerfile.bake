@@ -1,0 +1,3 @@
+# well this one's simple enough
+FROM noita-headless
+COPY noita /noita

@@ -67,3 +67,16 @@ stop:
 # Stop the container and drop its appdata volume
 clean: stop
     -docker volume rm {{appdata}} 2>/dev/null
+
+# Bake a standalone image that works without bind mounts
+bake src="./noita" tag="noita-headless-baked": build
+    rm -rf .bake-context
+    mkdir -p .bake-context
+    rsync -a \
+        --exclude=tools_modding \
+        --exclude=mods \
+        --include='Master Bank*.bank' \
+        --exclude='*.bank' \
+        {{src}}/ .bake-context/noita/
+    docker build -t {{tag}} -f Dockerfile.bake .bake-context
+    rm -rf .bake-context
