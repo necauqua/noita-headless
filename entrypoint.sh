@@ -99,4 +99,8 @@ EOF
 
 log "launching: wine noita.exe $*"
 cd /app
+
+# stream noita's logger.txt to stdout to see it in `docker logs`
+tail -F logger.txt 2>/dev/null &
+
 exec wine noita.exe "$@"

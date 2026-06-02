@@ -1,15 +1,9 @@
 FROM debian:bookworm-slim
 
-# WINEDLLOVERRIDES:
-#   mscoree, mshtml skip the .NET + Gecko download prompt on prefix init
-#   winealsa.drv    no audio device in the container; not loading
-#                   Wine's ALSA bridge keeps libasound2 from
-#                   spamming "cannot find card '0'" on startup
 ENV DEBIAN_FRONTEND=noninteractive \
     WINEPREFIX=/wineprefix \
     WINEARCH=win32 \
     WINEDEBUG=-all \
-    WINEDLLOVERRIDES="mscoree,mshtml,winealsa.drv=" \
     LIBGL_ALWAYS_SOFTWARE=1 \
     DISPLAY=:99
 
@@ -32,12 +26,16 @@ RUN Xvfb :99 -screen 0 1280x720x24 -nolisten tcp & XVFB_PID=$! \
  && kill $XVFB_PID \
  && rm -rf /tmp/.X* /tmp/wine-*
 
-COPY entrypoint.sh screenshot.sh /
-RUN chmod +x /entrypoint.sh /screenshot.sh
+# Configure ALSA with a null device so there is "an audio device" and we dont
+# get giga spammed by ALSA/FMOD errors about not having sound in the container
+RUN printf 'pcm.!default { type null }\nctl.!default { type null }\n' > /etc/asound.conf
 
 # Harness mod baked into the image. The entrypoint copies it (alongside the
 # user's mods from /mods) into /app/mods at container start.
 COPY noita-docker-harness/ /opt/noita-docker-harness/
+
+COPY entrypoint.sh screenshot.sh /
+RUN chmod +x /entrypoint.sh /screenshot.sh
 
 # tini makes SIGTERM sent via `docker stop` to actually work
 ENTRYPOINT ["/usr/bin/tini", "--", "/entrypoint.sh"]
