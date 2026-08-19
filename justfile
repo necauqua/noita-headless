@@ -97,6 +97,25 @@ stop timeout="10":
 reset: stop
     -{{docker}} volume rm {{appdata}} 2>/dev/null
 
+# End-to-end smoke test: build, boot, wait for the ready signal, screenshot
+# Runs under its own `name`, so it never touches your regular save volume.
+test out="smoketest.png": build
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    j=(just docker={{docker}} name=smoketest)
+    trap '"${j[@]}" reset >/dev/null 2>&1 || true' EXIT
+
+    "${j[@]}" reset >/dev/null 2>&1 || true
+    "${j[@]}" start
+    "${j[@]}" wait
+    sleep 4 # a little bit of extra wait for the initial fade in
+    "${j[@]}" screenshot {{out}}
+
+    size=$(stat -c%s {{out}})
+    (( size > 1024 )) || { echo "screenshot is suspiciously small ($size bytes)" >&2; exit 1; }
+    echo "ok: world loaded, wrote {{out}} ($size bytes)"
+
 # Bake a standalone image that works without bind mounts
 bake tag="" path=`just locate-noita`: build
     #!/usr/bin/env bash

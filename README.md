@@ -44,6 +44,9 @@ Override variables on the CLI: `just seed=12345 start`,
 `just resolution=1920x1080x24 start`, `just image=noita-headless:2024-01-30
 start` (see *Baking* below). Run `just` for the full recipe menu.
 
+`just test` does the whole build → boot → wait → screenshot cycle in one go
+under a dedicated `name`, as a smoke test.
+
 `name` is used as a container name suffix as well as the key for the
 `noita-appdata-<name>` named volume that persists the save across runs.
 Distinct names → independent containers and independent saves.
