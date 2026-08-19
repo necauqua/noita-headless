@@ -6,7 +6,7 @@ log() { echo "[noita-docker] $*"; }
 if [ ! -f /noita/noita.exe ]; then
     log "ERROR: /noita does not contain noita.exe. Either:"
     log "  - mount the game folder: docker run -v \"\$PWD/noita:/noita:ro\" ... noita-headless"
-    log "  - or use a baked image (built via 'just bake') which doesn't need this mount"
+    log "  - or use a baked image (built via 'scripts/bake.sh') which doesn't need this mount"
     exit 1
 fi
 

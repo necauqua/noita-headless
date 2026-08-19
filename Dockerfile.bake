@@ -1,3 +1,4 @@
 # well this one's simple enough
-FROM noita-headless
+ARG BASE_IMAGE=noita-headless
+FROM ${BASE_IMAGE}
 COPY noita /noita

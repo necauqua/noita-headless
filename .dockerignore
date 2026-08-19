@@ -1,5 +1,7 @@
 *
 !entrypoint.sh
 !screenshot.sh
+!wait-ready.sh
+!shutdown.sh
 !noita-docker-harness/
 !noita-docker-harness/**

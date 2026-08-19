@@ -13,7 +13,13 @@ code in a real running Noita engine.
 ├── Dockerfile.bake           # extends `noita-headless` with the noita install baked in (used by `just bake`)
 ├── entrypoint.sh             # Xvfb, AppData link, /noita -> /app mirror, save pre-seed, run noita.exe
 ├── screenshot.sh             # xwd -> pnm -> png from the in-container Xvfb display
-├── justfile                  # parameterized recipes for common operations
+├── wait-ready.sh             # in-container: block until the world is loaded
+├── shutdown.sh               # in-container: alt+F4 to noita, wait for it to exit
+├── scripts/                  # host-side helpers, usable without just
+│   ├── locate-noita.sh       #   find Noita in the Steam library
+│   ├── noita-version.sh      #   build date scraped out of noita.exe
+│   └── bake.sh               #   build a standalone image with noita inside
+├── justfile                  # thin wrappers around the above, for common operations
 ├── noita-docker-harness/     # mod baked into the image (see *Harness mod*)
 └── mods/<id>/                # user mods (host-side; merged into /app/mods at start)
 ```
@@ -23,7 +29,8 @@ code in a real running Noita engine.
 - Docker or Podman
 - A Noita install in a known location (Steam or otherwise)
 - Optional: [`just`](https://github.com/casey/just) for the recipes below.
-  Without it everything still works via plain `docker build` / `docker run`.
+  Without it everything still works via plain `docker build` / `docker run`
+  plus the scripts in `scripts/` (see *Quick start (without just)*).
 
 ## Quick start (with just)
 
@@ -73,13 +80,24 @@ docker run --rm -d --name noita \
     -v noita-appdata-default:/appdata \
     noita-headless
 
+# Block until the harness mod signals that the world is up (default 120s)
+docker exec noita /wait-ready.sh 120
+
 docker exec noita /screenshot.sh > shot.png
 
-# This will most likely not properly write the save if you bind-mount
-# appdata as described above - in my experience the best result was actually
-# sending alt+f4 to it via xdotool, see the `just stop` recipe.
-docker stop noita 
+# Synthesize input
+docker exec noita xdotool key Escape
+
+# A plain `docker stop` will most likely not write the save if you bind-mount
+# appdata as described above, so alt+F4 the game and wait for it to exit first.
+docker exec noita /shutdown.sh 10
+docker stop noita
 ```
+
+Everything the recipes do is available this way: they are thin wrappers around
+`/wait-ready.sh`, `/shutdown.sh` and `/screenshot.sh` inside the container, and
+`scripts/*.sh` on the host (`locate-noita.sh`, `noita-version.sh`, `bake.sh`).
+Downstream users of the image never need `just`.
 
 Only the `/noita` bind is required. `/mods` and `/appdata` are both optional —
 without `/appdata` the save lives in the container's writable layer and goes
@@ -185,8 +203,8 @@ few things:
   doesn't fire when the player entity is loaded from a save. The entrypoint
   deletes any stale file before launch, so its appearance is unambiguous
   per run. It lives in the container's `/app`, not in the appdata volume, so
-  it is not visible on the host filesystem — poll it with `just wait`, which
-  runs `docker exec {{container}} test -e /app/player_ready`.
+  it is not visible on the host filesystem — poll it with
+  `docker exec <container> /wait-ready.sh [timeout]`, which `just wait` wraps.
 - **Seed override.** `NOITA_WORLD_SEED=<seed>` being set calls
   `SetWorldSeed(<seed>)`. The value is templated straight into Lua, so the
   entrypoint rejects anything that is not an integer in `1..2147483647`
@@ -233,8 +251,8 @@ then connect the VNC client to `localhost:5900` on your local machine.
 Note that this is a questionable thing to do and you *definitely* shouldn't
 redistribute such an image.
 
-`just bake` builds a self-contained image that doesn't need the
-`-v <path>:/noita` bind at run time. The default tag is
+`scripts/bake.sh` (wrapped by `just bake`) builds a self-contained image that
+doesn't need the `-v <path>:/noita` bind at run time. The default tag is
 `noita-headless:<build-date>`, where the date is scraped out of the
 `Noita - Build … -` string inside `noita.exe`, and is printed at the end of
 the build. It rsyncs your Noita
@@ -246,7 +264,14 @@ layers it on top of `noita-headless`.
 just bake                          # → noita-headless:2024-01-30
 just bake path=/path/to/noita
 just bake tag=custom-image-tag
+
+# same thing without just (the base image has to be built first):
+docker build -t noita-headless .
+scripts/bake.sh                    # → noita-headless:2024-01-30
+scripts/bake.sh custom-tag /path/to/noita
 ```
+
+`scripts/bake.sh` honours `DOCKER=podman` and `BASE_IMAGE=<image>`.
 
 `Master Bank.bank` + `Master Bank.strings.bank` (~2.4 MB) are kept even
 though `*.bank` is otherwise excluded — without them noita's audio.cpp
@@ -279,15 +304,17 @@ against a baked image.
 | recipe | what it does |
 |---|---|
 | `just build` | `docker build -t noita-headless .` |
-| `just bake [tag=…]` | build a standalone image with noita baked in (run it via `just image=… start`) |
+| `just bake [tag=…]` | `scripts/bake.sh` — standalone image with noita baked in (run it via `just image=… start`) |
+| `just locate-noita` | `scripts/locate-noita.sh` — print the Steam install path |
+| `just version [path=…]` | `scripts/noita-version.sh` — print the build date of an install |
 | `just start` | run the container, detached |
-| `just wait [timeout]` | poll `/app/player_ready` via `docker exec`, fail after `timeout` (default 120s) |
+| `just wait [timeout]` | `docker exec <c> /wait-ready.sh` — block until the world is loaded, fail after `timeout` (default 120s) |
 | `just screenshot [path]` | write the current frame to `path` (default `./shot.png`) |
 | `just send …` | run xdotool inside the container, args passed through |
 | `just list` | list running noita containers (anything named `noita-*`) |
 | `just test [out]` | smoke test: build, boot, wait, screenshot, tear down |
 | `just logs` | `docker logs -f` the container |
-| `just stop` | graceful shutdown: alt+F4 to noita, wait for `noita.exe` to exit, `docker stop` fallback — gives noita a chance to save |
+| `just stop` | `docker exec <c> /shutdown.sh` (alt+F4, wait for `noita.exe` to exit) + `docker stop` fallback — gives noita a chance to save |
 | `just reset` | `stop` then drop the `noita-appdata-{{name}}` volume |
 
 ## AI Assistance

@@ -34,8 +34,8 @@ RUN printf 'pcm.!default { type null }\nctl.!default { type null }\n' > /etc/aso
 # user's mods from /mods) into /app/mods at container start.
 COPY noita-docker-harness/ /opt/noita-docker-harness/
 
-COPY entrypoint.sh screenshot.sh /
-RUN chmod +x /entrypoint.sh /screenshot.sh
+COPY entrypoint.sh screenshot.sh wait-ready.sh shutdown.sh /
+RUN chmod +x /entrypoint.sh /screenshot.sh /wait-ready.sh /shutdown.sh
 
 # tini makes SIGTERM sent via `docker stop` to actually work
 ENTRYPOINT ["/usr/bin/tini", "--", "/entrypoint.sh"]
