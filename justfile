@@ -44,7 +44,7 @@ build:
     {{docker}} build -t noita-headless .
 
 # Start a detached Noita container
-@start path="":
+start path="":
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -99,18 +99,26 @@ reset: stop
 
 # End-to-end smoke test: build, boot, wait for the ready signal, screenshot
 # Runs under its own `name`, so it never touches your regular save volume.
-test out="smoketest.png": build
+test out="smoketest.png" name="smoketest": build
     #!/usr/bin/env bash
     set -euo pipefail
 
-    j=(just docker={{docker}} name=smoketest)
-    trap '"${j[@]}" reset >/dev/null 2>&1 || true' EXIT
+    j=(just docker={{docker}} image={{image}} name={{name}})
+    trap '"${j[@]}" reset' EXIT
 
-    "${j[@]}" reset >/dev/null 2>&1 || true
+    echo "resetting smoketest container..."
+    "${j[@]}" reset
+    echo "starting smoketest container..."
     "${j[@]}" start
+    echo "waiting for world to load..."
     "${j[@]}" wait
-    sleep 4 # a little bit of extra wait for the initial fade in
+    sleep 10 # a little bit of extra wait for the initial fade in
     "${j[@]}" screenshot {{out}}
+
+    echo "noita log:"
+    echo "====="
+    {{docker}} logs noita-{{name}}
+    echo "====="
 
     size=$(stat -c%s {{out}})
     (( size > 1024 )) || { echo "screenshot is suspiciously small ($size bytes)" >&2; exit 1; }
