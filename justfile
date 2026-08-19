@@ -124,6 +124,13 @@ test out="smoketest.png" name="smoketest": build
     (( size > 1024 )) || { echo "screenshot is suspiciously small ($size bytes)" >&2; exit 1; }
     echo "ok: world loaded, wrote {{out}} ($size bytes)"
 
+    if command -v chafa >/dev/null 2>&1; then
+        echo "preview:"
+        chafa --symbols vhalf --size 48 {{out}}
+    else
+        echo "chafa not found, skipping terminal preview"
+    fi
+
 # Bake a standalone image that works without bind mounts
 bake tag="" path=`just locate-noita`: build
     #!/usr/bin/env bash
