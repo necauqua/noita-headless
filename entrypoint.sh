@@ -136,7 +136,31 @@ EOF
 log "launching: wine noita.exe $*"
 cd /app
 
-# stream noita's logger.txt to stdout to see it in `docker logs`
-tail -F logger.txt 2>/dev/null &
+# Stream noita's logger.txt to stdout so it shows up in `docker logs`, line by
+# line as the game writes it. `-n +1` is essential: without it tail applies its
+# default "last 10 lines" rule to the file once it appears, silently dropping
+# whatever Noita managed to write before tail noticed it.
+tail -n +1 -F logger.txt 2>/dev/null &
+tail_pid=$!
 
-exec wine noita.exe "$@"
+# Run wine as a child rather than exec'ing it, so that when it exits we get a
+# chance to drain the last log lines before the container tears down.
+wine noita.exe "$@" &
+wine_pid=$!
+
+# Forward stop signals to the game instead of dying on them.
+trap 'kill -TERM "$wine_pid" 2>/dev/null' INT TERM
+
+# `wait` returns early when a trapped signal arrives, so keep waiting until the
+# game is really gone.
+while kill -0 "$wine_pid" 2>/dev/null; do
+    status=0
+    wait "$wine_pid" || status=$?
+done
+
+# Give tail a moment to pick up whatever Noita wrote on its way out.
+sleep 0.5
+kill "$tail_pid" 2>/dev/null
+wait "$tail_pid" 2>/dev/null || true
+
+exit "${status:-0}"
