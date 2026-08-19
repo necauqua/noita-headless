@@ -10,15 +10,31 @@ if [ ! -f /noita/noita.exe ]; then
     exit 1
 fi
 
-log "starting Xvfb on :99"
-Xvfb :99 -screen 0 1280x720x24 -nolisten tcp &
-XVFB_PID=$!
-trap 'kill "$XVFB_PID" 2>/dev/null' EXIT
+# NOITA_WORLD_SEED is templated into Lua below, so it has to be a plain
+# integer. Noita seeds are 1..2^31-1.
+if [ -n "${NOITA_WORLD_SEED:-}" ]; then
+    case "$NOITA_WORLD_SEED" in
+        *[!0-9]*)
+            log "ERROR: NOITA_WORLD_SEED must be an integer in 1..2147483647,"
+            log "       got '$NOITA_WORLD_SEED'"
+            exit 1
+            ;;
+    esac
+    if [ "$NOITA_WORLD_SEED" -lt 1 ] || [ "$NOITA_WORLD_SEED" -gt 2147483647 ]; then
+        log "ERROR: NOITA_WORLD_SEED out of range 1..2147483647: $NOITA_WORLD_SEED"
+        exit 1
+    fi
+fi
+
+RESOLUTION=${NOITA_RESOLUTION:-1280x720x24}
+
+log "starting Xvfb on :99 ($RESOLUTION)"
+Xvfb :99 -screen 0 "$RESOLUTION" -nolisten tcp &
+until [ -S /tmp/.X11-unix/X99 ]; do sleep 0.05; done
 
 # Optional VNC server attached to :99. No password -- expose the port only
 # locally or over an SSH tunnel.
 if [ -n "$NOITA_VNC" ]; then
-    until [ -S /tmp/.X11-unix/X99 ]; do sleep 0.05; done
     log "starting x11vnc on :5900"
     x11vnc -display :99 -forever -shared -nopw -quiet -rfbport 5900 &
 fi
@@ -36,7 +52,21 @@ fi
 # This lets us edit /app/mods, keeping /noita bind readonly, as well as lets
 # Noita itself write to logger.txt etc
 log "mirroring /noita -> /app"
+rm -rf /app
 cp -rs /noita /app
+
+# Files Noita rewrites inside its own install directory would end up as
+# symlinks into the read-only bind, so drop them and let the game recreate
+# them as real files in the container layer.
+rm -f /app/logger.txt /app/player_ready
+
+# Noita shows the "Welcome to Noita Update" popup when _version_hash.txt
+# disagrees with config.xml's last_started_game_version_hash. Pin both to a
+# constant instead of reading the real hash, so the popup can never show up
+# no matter which build is mounted.
+VERSION_HASH=static
+rm -f /app/_version_hash.txt
+printf %s "$VERSION_HASH" > /app/_version_hash.txt
 
 # make sure mods is an empty folder that does exist
 rm -rf /app/mods
@@ -65,7 +95,7 @@ mkdir -p "$NOITA_DIR/save00/persistent/flags" "$NOITA_DIR/save_shared"
 touch "$NOITA_DIR/save00/persistent/flags/intro_has_played"
 
 # config.xml:
-#   last_started_game_version_hash matches the game's _version_hash.txt
+#   last_started_game_version_hash matches the _version_hash.txt written above
 #     -> skips the "Welcome to Noita Update" popup
 #   mods_sandbox_enabled="0" + dismissed disclaimer flags
 #     -> mods get unsandboxed Lua (needed for the harness mod's file signal)
@@ -75,7 +105,7 @@ cat > "$NOITA_DIR/save_shared/config.xml" <<EOF
   mods_disclaimer_accepted="1"
   mods_sandbox_enabled="0"
   mods_sandbox_warning_done="1"
-  last_started_game_version_hash="$(cat /noita/_version_hash.txt)"
+  last_started_game_version_hash="$VERSION_HASH"
 />
 EOF
 

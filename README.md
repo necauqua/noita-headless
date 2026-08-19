@@ -9,6 +9,7 @@ code in a real running Noita engine.
 ```
 .
 ├── Dockerfile                # debian:bookworm-slim + wine32 + Xvfb + Mesa llvmpipe
+├── .dockerignore             # keeps the build context to the few files the image needs
 ├── Dockerfile.bake           # extends `noita-headless` with the noita install baked in (used by `just bake`)
 ├── entrypoint.sh             # Xvfb, AppData link, /noita -> /app mirror, save pre-seed, run noita.exe
 ├── screenshot.sh             # xwd -> pnm -> png from the in-container Xvfb display
@@ -39,7 +40,9 @@ just reset      # stop the container and remove the appdata volume (use `just st
 
 Override variables on the CLI: `just seed=12345 start`,
 `just args="-gamemode 2 -no_logo_splashes" start`, `just name=second start`,
-`just vnc=true start` (see *VNC* below). Run `just` for the full recipe menu.
+`just vnc=true start` (see *VNC* below), `just docker=podman start`,
+`just resolution=1920x1080x24 start`, `just image=noita-headless:2024-01-30
+start` (see *Baking* below). Run `just` for the full recipe menu.
 
 `name` is used as a container name suffix as well as the key for the
 `noita-appdata-<name>` named volume that persists the save across runs.
@@ -53,7 +56,7 @@ docker build -t noita-headless .
 # Minimum: just bind your Noita install, the save is not preserved.
 docker run --rm -d --name noita \
     -v "$NOITA_INSTALL:/noita:ro" \
-    noita-headless -gamemode -no_logo_splashes
+    noita-headless -gamemode 0 -no_logo_splashes
 
 # Bind a folder of mods to be installed into the game:
 docker run --rm -d --name noita \
@@ -87,6 +90,10 @@ Xvfb runs on `:99` for the lifetime of the container (started by the
 entrypoint). Mesa's llvmpipe handles OpenGL in software via the i386
 `libgl1-mesa-dri` package — no GPU needed. `LIBGL_ALWAYS_SOFTWARE=1` keeps it
 deterministic.
+
+The virtual screen is `1280x720x24`; `NOITA_RESOLUTION` (`just
+resolution=…`) overrides the Xvfb geometry. That is the size of the display,
+not of the game window — Noita picks that from its own config.
 
 ### Wine
 
@@ -135,7 +142,14 @@ persists across container lifecycles.
 The `/noita` bind is read-only, so we cant edit the mods folder and Noita can't
 write logs at the very least.
 
-So we build a symlink tree at `/app` inside of the container instead.
+So we build a symlink tree at `/app` inside of the container instead. Files
+Noita rewrites inside its own install directory (`logger.txt`) are deleted
+from the tree afterwards — otherwise they'd stay symlinks pointing into the
+read-only bind and the game's writes would fail with `EROFS`.
+
+`_version_hash.txt` gets replaced with a real file containing the constant
+`static`, and `config.xml` is pre-seeded with the same value, so the update
+popup can never show up regardless of which build is mounted.
 
 The read-only bind ensures the container does not modify the Noita instance
 that was given to it, and you can point it directly at your Steam installation
@@ -167,11 +181,13 @@ few things:
   use `OnWorldPreUpdate` rather than `OnPlayerSpawned` because the latter
   doesn't fire when the player entity is loaded from a save. The entrypoint
   deletes any stale file before launch, so its appearance is unambiguous
-  per run. Use `just wait`, which polls
-  `docker exec {{container}} test -e /app/player_ready` (the appdata
-  volume isn't visible on the host filesystem).
+  per run. It lives in the container's `/app`, not in the appdata volume, so
+  it is not visible on the host filesystem — poll it with `just wait`, which
+  runs `docker exec {{container}} test -e /app/player_ready`.
 - **Seed override.** `NOITA_WORLD_SEED=<seed>` being set calls
-  `SetWorldSeed(<seed>)`.
+  `SetWorldSeed(<seed>)`. The value is templated straight into Lua, so the
+  entrypoint rejects anything that is not an integer in `1..2147483647`
+  (the range of valid Noita seeds).
 - **Enables Noita's logger.** See *Logging* above.
 
 Env vars are not visible to Noita's Lua directly; the entrypoint writes a
@@ -196,8 +212,9 @@ and writes the result to its first arg (or stdout if none). `just screenshot
 
 Setting `NOITA_VNC` (any non-empty value) makes the entrypoint start `x11vnc`
 attached to `:99` on port 5900. `just vnc=true start` does that and adds
-`-p 5900:5900`, so any VNC client (TigerVNC, Remmina, KRDC, …) pointed at
-`localhost:5900` shows the live display and forwards mouse/keyboard.
+`-p localhost:5900:5900`, so any VNC client (TigerVNC, Remmina, KRDC, …)
+pointed at `localhost:5900` shows the live display and forwards
+mouse/keyboard.
 
 No password is set — for a remote host, don't publish 5900 directly; SSH-tunnel
 it instead:
@@ -213,14 +230,17 @@ then connect the VNC client to `localhost:5900` on your local machine.
 Note that this is a questionable thing to do and you *definitely* shouldn't
 redistribute such an image.
 
-`just bake` builds a self-contained image (default tag: `noita-headless-baked`)
-that doesn't need the `-v <path>:/noita` bind at run time. It rsyncs your Noita
+`just bake` builds a self-contained image that doesn't need the
+`-v <path>:/noita` bind at run time. The default tag is
+`noita-headless:<build-date>`, where the date is scraped out of the
+`Noita - Build … -` string inside `noita.exe`, and is printed at the end of
+the build. It rsyncs your Noita
 installation into a temp build context, dropping `tools_modding/`, `mods/`,
 and `**.bank` audio (~1.2 GB of dead weight in a no-audio container), then
 layers it on top of `noita-headless`.
 
 ```sh
-just bake                          # → localhost/noita-headless-baked
+just bake                          # → noita-headless:2024-01-30
 just bake path=/path/to/noita
 just bake tag=custom-image-tag
 ```
@@ -235,12 +255,19 @@ the missing sub-banks.
 Running the baked image does not need the `/noita` mount (the whole point):
 
 ```sh
-docker run --rm -d --name noita noita-headless:baked
+docker run --rm -d --name noita noita-headless:2024-01-30
 ```
 
-The justfile's `start` recipe still bind-mounts `./noita`, so it's tied to
-the `noita-headless` image; run the baked one with plain `docker run` as
-above.
+The recipes drive it too — point `image` at the baked tag and `start` skips
+the `/noita` bind (and with it the Steam library lookup) automatically:
+
+```sh
+just image=noita-headless:2024-01-30 start
+just image=noita-headless:2024-01-30 test
+```
+
+An explicit `path=` still wins, if you want to run some *other* install
+against a baked image.
 
 ## Commands
 
@@ -249,12 +276,13 @@ above.
 | recipe | what it does |
 |---|---|
 | `just build` | `docker build -t noita-headless .` |
-| `just bake [tag=…]` | build a standalone image with noita baked in (no `-v …:/noita` needed) |
+| `just bake [tag=…]` | build a standalone image with noita baked in (run it via `just image=… start`) |
 | `just start` | run the container, detached |
 | `just wait [timeout]` | poll `/app/player_ready` via `docker exec`, fail after `timeout` (default 120s) |
 | `just screenshot [path]` | write the current frame to `path` (default `./shot.png`) |
 | `just send …` | run xdotool inside the container, args passed through |
-| `just list` | list running noita containers |
+| `just list` | list running noita containers (anything named `noita-*`) |
+| `just test [out]` | smoke test: build, boot, wait, screenshot, tear down |
 | `just logs` | `docker logs -f` the container |
 | `just stop` | graceful shutdown: alt+F4 to noita, wait for `noita.exe` to exit, `docker stop` fallback — gives noita a chance to save |
 | `just reset` | `stop` then drop the `noita-appdata-{{name}}` volume |

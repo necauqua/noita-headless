@@ -1,0 +1,5 @@
+*
+!entrypoint.sh
+!screenshot.sh
+!noita-docker-harness/
+!noita-docker-harness/**

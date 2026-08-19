@@ -1,4 +1,7 @@
 /.bake-context
 
+# in case you mount appdata
+/appdata
+
 # potential random screenshots
-*.png
+/*.png

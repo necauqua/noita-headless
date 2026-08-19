@@ -1,7 +1,7 @@
 # noita-docker — common operations. Run `just` for the full menu.
 #
 # Override variables on the CLI:
-#   just args="-gamemode 0" start
+#   just args="-gamemode 2" start
 #   just seed=12345 start
 #   just name=test start
 
@@ -10,7 +10,7 @@
 name := "default"
 
 # Args forwarded to noita.exe
-args := "-gamemode -no_logo_splashes"
+args := "-gamemode 0 -no_logo_splashes"
 
 # Optional world seed
 seed := ""
@@ -18,6 +18,17 @@ seed := ""
 # Set to any non-empty value (e.g. `just vnc=true start`) to run x11vnc inside
 # the container and publish 5900 on the host. No auth -- bind locally or tunnel.
 vnc := ""
+
+# Container engine; `just docker=podman start` also works
+docker := "docker"
+
+# Image to run. Point it at a baked image (see `just bake`) to run without a
+# Noita install on the host -- the /noita bind is then skipped automatically.
+image := "noita-headless"
+
+# Xvfb screen geometry. Note this is the size of the virtual display, the game
+# window size comes from Noita's own config.
+resolution := ""
 
 # Derived container name
 container := "noita-" + name
@@ -30,51 +41,71 @@ appdata := "noita-appdata-" + name
 
 # Build/rebuild the image
 build:
-    docker build -t noita-headless .
+    {{docker}} build -t noita-headless .
 
 # Start a detached Noita container
-@start path=`just locate-noita`:
-    docker run --rm -d --name {{container}} \
-        -v {{path}}:/noita:ro \
+@start path="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # A baked image carries the game inside it, so it needs no bind -- but an
+    # explicit path= still wins, to run a different install against that image.
+    noita=()
+    path="{{path}}"
+    if [[ -n "$path" || "{{image}}" == "noita-headless" ]]; then
+        [[ -n "$path" ]] || path=$(just locate-noita)
+        noita=(-v "$path:/noita:ro")
+    fi
+
+    {{docker}} run --rm -d --name {{container}} \
+        "${noita[@]}" \
         -v {{justfile_directory()}}/mods:/mods:ro \
         -v {{appdata}}:/appdata \
         {{ if seed != "" { "-e NOITA_WORLD_SEED=" + seed } else { "" } }} \
+        {{ if resolution != "" { "-e NOITA_RESOLUTION=" + resolution } else { "" } }} \
         {{ if vnc != "" { "-e NOITA_VNC=1 -p localhost:5900:5900" } else { "" } }} \
-        noita-headless {{args}}
+        {{image}} {{args}}
 
 # Wait until the harness mod signals readiness, or fail after `timeout` seconds
 @wait timeout="120":
-    timeout {{timeout}} sh -c 'until docker exec {{container}} test -e /app/player_ready 2>/dev/null; do sleep 0.1; done' \
+    timeout {{timeout}} sh -c 'until {{docker}} exec {{container}} test -e /app/player_ready 2>/dev/null; do sleep 0.1; done' \
         || { echo "timed out after {{timeout}}s; check 'just logs'" >&2; exit 1; }
 
 # Dump the current frame to `path` (default ./shot.png)
 screenshot path="shot.png":
-    docker exec {{container}} /screenshot.sh > {{path}}
+    {{docker}} exec {{container}} /screenshot.sh > {{path}}
 
 # Run xdotool in the container (e.g. `just send key Return`)
 send +xargs:
-    docker exec {{container}} xdotool {{xargs}}
+    {{docker}} exec {{container}} xdotool {{xargs}}
 
 # List running noita containers
 @list:
-    docker ps --filter ancestor=noita-headless --format "{{ '{{.Names}}\t{{.Status}}' }}"
+    {{docker}} ps --filter 'name=^noita-' --format "{{ '{{.Names}}\t{{.Status}}' }}"
 
 # Follow the container logs
 logs:
-    docker logs -f {{container}}
+    {{docker}} logs -f {{container}}
 
 # Gracefully stop the container in a way that allows Noita a chance to write the save
 stop timeout="10":
-    @-docker exec {{container}} xdotool search --name Noita key --window %@ alt+F4 2>/dev/null
-    @timeout {{timeout}} sh -c 'while docker exec {{container}} pidof noita.exe >/dev/null 2>&1; do sleep 0.1; done'
-    -docker stop {{container}} 2>/dev/null
+    @-{{docker}} exec {{container}} xdotool search --name Noita key --window %@ alt+F4 2>/dev/null
+    @timeout {{timeout}} sh -c 'while {{docker}} exec {{container}} pidof noita.exe >/dev/null 2>&1; do sleep 0.1; done'
+    -{{docker}} stop {{container}} 2>/dev/null
 
 # Stop the container and drop its appdata volume
 reset: stop
-    -docker volume rm {{appdata}} 2>/dev/null
+    -{{docker}} volume rm {{appdata}} 2>/dev/null
 
 # Bake a standalone image that works without bind mounts
 bake tag="" path=`just locate-noita`: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    tag="{{tag}}"
+    [[ -n "$tag" ]] || tag="noita-headless:$(just extract-version-date '{{path}}')"
+
+    trap 'rm -rf .bake-context' EXIT
     rm -rf .bake-context
     mkdir -p .bake-context
     rsync -a \
@@ -82,12 +113,11 @@ bake tag="" path=`just locate-noita`: build
         --exclude=mods \
         --include='Master Bank*.bank' \
         --exclude='*.bank' \
-        {{path}}/ .bake-context/noita/
-    docker build \
-        -t {{ if tag != "" { tag } else { "noita-headless:" + `just extract-version-date` } }} \
-        -f Dockerfile.bake \
-        .bake-context
-    rm -rf .bake-context
+        '{{path}}/' .bake-context/noita/
+    {{docker}} build -t "$tag" -f Dockerfile.bake .bake-context
+
+    echo "baked image: $tag"
+    echo "run it with: just image=$tag start"
 
 # Try to find Noita installed in your Steam library
 [private]
@@ -119,6 +149,6 @@ locate-noita:
     echo "$found/Noita"
 
 [private]
-@extract-version-date:
-    strings "{{ `just locate-noita` }}/noita.exe" \
+@extract-version-date path=`just locate-noita`:
+    strings "{{path}}/noita.exe" \
         | perl -lne 'print lc($1 =~ s/ /-/gr) if /^Noita - Build (.+?) -/'
