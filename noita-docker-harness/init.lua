@@ -9,8 +9,8 @@ end
 
 function OnWorldPreUpdate()
   -- Z:\ is wine's mapping of the container filesystem root, so this writes
-  -- /app/player_ready, which `just wait` polls via `docker exec`.
-  local f, err = io.open([[Z:\app\player_ready]], "w")
+  -- /app/world_ready, which `just wait` polls via `docker exec`.
+  local f, err = io.open([[Z:\app\world_ready]], "w")
   if not f then
     error("noita-docker-harness: could not write the ready signal: " .. tostring(err))
   end

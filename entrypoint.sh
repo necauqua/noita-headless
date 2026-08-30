@@ -58,7 +58,7 @@ cp -rs /noita /app
 # Files Noita rewrites inside its own install directory would end up as
 # symlinks into the read-only bind, so drop them and let the game recreate
 # them as real files in the container layer.
-rm -f /app/logger.txt /app/player_ready
+rm -f /app/logger.txt /app/world_ready
 
 # Noita shows the "Welcome to Noita Update" popup when _version_hash.txt
 # disagrees with config.xml's last_started_game_version_hash. Pin both to a

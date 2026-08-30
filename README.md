@@ -148,7 +148,7 @@ Before launching the game, `entrypoint.sh` writes a handful of files into
 - `save_shared/config.xml` with `last_started_game_version_hash` matching the
   game's `_version_hash.txt` (skips the "Welcome to Noita Update" popup) and
   `mods_sandbox_enabled="0"` (lets the harness mod use unsandboxed Lua to write
-  the `player_ready` signal) + the disclaimer-dismissed flags.
+  the `world_ready` signal) + the disclaimer-dismissed flags.
 - `save00/mod_config.xml` enabling every directory under `/app/mods/` —
   i.e. the harness plus everything the user put in `./mods/`. Mod id comes
   from `mod_id.txt` if present, else the directory name.
@@ -197,10 +197,12 @@ present, else the directory name, and writes a corresponding
 `noita-docker-harness/` (top-level) is baked into the image and helps with a
 few things:
 
-- **Ready signal.** `OnWorldPreUpdate` writes `/app/player_ready` the
+- **Ready signal.** `OnWorldPreUpdate` writes `/app/world_ready` the
   first frame the world is up, then sets itself to `nil` (fire-once). We
   use `OnWorldPreUpdate` rather than `OnPlayerSpawned` because the latter
-  doesn't fire when the player entity is loaded from a save. The entrypoint
+  doesn't fire when the player entity is loaded from a save. The signal is
+  called `world_ready` and not `player_ready` because the world starts
+  updating before the player entity exists. The entrypoint
   deletes any stale file before launch, so its appearance is unambiguous
   per run. It lives in the container's `/app`, not in the appdata volume, so
   it is not visible on the host filesystem — poll it with
