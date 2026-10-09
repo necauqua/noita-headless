@@ -14,6 +14,7 @@ RUN dpkg --add-architecture i386 \
         xvfb x11-apps xdotool x11vnc netpbm \
         libgl1:i386 libgl1-mesa-dri:i386 \
         tini \
+        ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
            /usr/share/doc /usr/share/man /usr/share/locale /usr/share/info \
  && mkdir -p /noita /wineprefix /appdata
