@@ -8,7 +8,7 @@ code in a real running Noita engine.
 
 ```
 .
-├── Dockerfile                # debian:bookworm-slim + wine32 + Xvfb + Mesa llvmpipe
+├── Dockerfile                # debian:trixie-slim + GE-Proton's Wine + Xvfb + Mesa llvmpipe
 ├── .dockerignore             # keeps the build context to the few files the image needs
 ├── Dockerfile.bake           # extends `noita-headless` with the noita install baked in (used by `just bake`)
 ├── entrypoint.sh             # Xvfb, AppData link, /noita -> /app mirror, save pre-seed, run noita.exe
@@ -108,9 +108,14 @@ away with `--rm`.
 ### Display
 
 Xvfb runs on `:99` for the lifetime of the container (started by the
-entrypoint). Mesa's llvmpipe handles OpenGL in software via the i386
+entrypoint). Mesa's llvmpipe handles OpenGL in software via the
 `libgl1-mesa-dri` package — no GPU needed. `LIBGL_ALWAYS_SOFTWARE=1` keeps it
 deterministic.
+
+Wine creates OpenGL contexts in `explorer.exe` when it starts, and with the
+Mesa shader cache enabled each of them opens the cache files again. That adds
+about 1.7s to every start, more than the cache saves, so the image sets
+`MESA_SHADER_CACHE_DISABLE=true`.
 
 The virtual screen is `1280x720x24`; `NOITA_RESOLUTION` (`just
 resolution=…`) overrides the Xvfb geometry. That is the size of the display,
@@ -118,11 +123,30 @@ not of the game window — Noita picks that from its own config.
 
 ### Wine
 
-A 32-bit prefix (`WINEARCH=win32`) is baked into the image at `/wineprefix`
-(`wineboot -i` runs during build). Nothing is mounted there at runtime —
-each `--rm` container gets a fresh copy via its writable layer. The
-container's PID 1 is `tini`, which forwards `SIGTERM` to wine so `docker
-stop` actually reaches noita.
+The game runs on the Wine of a pinned
+[GE-Proton](https://github.com/GloriousEggroll/proton-ge-custom) release, set
+by the `GE_PROTON` build argument of the `Dockerfile` (`docker build
+--build-arg GE_PROTON=…`). This is also the kind of Wine that runs the game on
+Steam. The build downloads the release, checks its SHA-512 sum, and keeps only
+what plain `wine` uses: the Wine binaries and libraries, vkd3d, the NLS files
+and Wine's own fonts. DXVK, vkd3d-proton, Gecko, Mono, the media and speech
+libraries and the other parts that only the `proton` script uses are removed.
+Proton 11 needs glibc 2.38 or later, so the base image is Debian trixie.
+
+The image does not run the `proton` script, only `wine` from the release, so
+it sets the environment that the script would set and that the game needs:
+`WINEDLLPATH`, and `WINENTSYNC=1`, `WINEFSYNC=1` and `WINEESYNC=1`. Wine uses
+ntsync when `/dev/ntsync` is passed into the container (`--device
+/dev/ntsync`, with the `ntsync` kernel module loaded on the host), else fsync,
+else esync. On a Ryzen 5950X all of them, and plain wineserver
+synchronisation, give the same time to `world_ready`.
+
+A 64-bit prefix, which is Proton's default and runs the 32-bit game, is baked
+into the image at `/wineprefix` (`wine wineboot -i` runs during build; Proton
+has no `wineboot` script). Proton's Wine always names the Windows user
+`steamuser`. Nothing is mounted there at runtime — each `--rm` container gets
+a fresh copy via its writable layer. The container's PID 1 is `tini`, which
+forwards `SIGTERM` to wine so `docker stop` actually reaches noita.
 
 ### Audio
 

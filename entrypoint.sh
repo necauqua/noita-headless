@@ -41,7 +41,8 @@ fi
 
 # Point %APPDATA%\..\LocalLow (where Noita stores save data) at /appdata,
 # so an optional -v <vol>:/appdata persists saves across container lifecycles.
-USER_DIR="$WINEPREFIX/drive_c/users/$(whoami)"
+# Proton's Wine always names the Windows user `steamuser`.
+USER_DIR="$WINEPREFIX/drive_c/users/steamuser"
 mkdir -p "$USER_DIR/AppData"
 if [ ! -L "$USER_DIR/AppData/LocalLow" ]; then
     rm -rf "$USER_DIR/AppData/LocalLow"
