@@ -343,8 +343,3 @@ against a baked image.
 | `just stop` | `docker exec <c> /shutdown.sh` (alt+F4, wait for `noita.exe` to exit) + `docker stop` fallback — gives noita a chance to save |
 | `just reset` | `stop` then drop the `noita-appdata-{{name}}` volume |
 
-## AI Assistance
-
-This project was built in a pair-programming session with Claude Opus 4.7
-(Anthropic) driving the file edits, container builds, and verification runs
-through the Claude Code CLI.
